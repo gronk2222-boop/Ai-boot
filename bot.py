@@ -9,30 +9,28 @@ from aiohttp import web
 # Загрузка переменных окружения
 load_dotenv()
 
-# ═══ КОНФИГУРАЦИЯ И КЛЮЧИ ═══
+# ═══ КОНФИГУРАЦИЯ ═══
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-PORT = int(os.getenv("PORT", 8000))  # Порт для Railway
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")  # Ключ от Groq
 
-if not TELEGRAM_TOKEN or not OPENROUTER_API_KEY:
-    raise ValueError("Ошибка: Не найдены переменные окружения TELEGRAM_TOKEN или OPENROUTER_API_KEY")
+if not TELEGRAM_TOKEN or not GROQ_API_KEY:
+    raise ValueError("Ошибка: Не найдены TELEGRAM_TOKEN или GROQ_API_KEY")
 
-# Настройки модели
-MODEL_NAME = "qwen/qwen2.5-coder:free"
-API_URL = "https://openrouter.ai/api/v1/chat/completions"
+# Настройки Groq
+# Используем быструю и бесплатную модель Qwen
+MODEL_NAME = "qwen-2.5-coder-32b" 
+API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-# ═══ ЛОГИКА АГЕНТОВ (ПРОМПТЫ) ═══
-ASSISTANT_PROMPT = "Ты аналитик. Преврати запрос пользователя в краткое техническое задание (1-2 предложения). Только суть."
-CODER_PROMPT = "Ты старший разработчик. Напиши чистый, безопасный Python-код по заданию. Только код."
-REVIEWER_PROMPT = "Ты ревьюер. Проверь код на соответствие заданию. Если всё верно, напиши только 'APPROVED'. Если ошибки — кратко опиши их."
+# ═══ ПРОМПТЫ АГЕНТОВ ═══
+ASSISTANT_PROMPT = "Ты аналитик. Преврати запрос в краткое ТЗ (1-2 предложения). Только суть."
+CODER_PROMPT = "Ты Senior Python Dev. Напиши чистый, безопасный код по ТЗ. Только код."
+REVIEWER_PROMPT = "Ты ревьюер. Проверь код на соответствие ТЗ. Если ОК — пиши 'APPROVED'. Если ошибки — кратко опиши."
 
-# ═══ ИНТЕГРАЦИЯ С OPENROUTER ═══
-
+# ═══ ВЫЗОВ LLM (GROQ) ═══
 async def call_llm(system_prompt, user_content):
     headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://railway.app",
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
     }
     
     payload = {
@@ -47,57 +45,57 @@ async def call_llm(system_prompt, user_content):
 
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post(API_URL, json=payload, headers=headers) as response:
+            async with session.post(API_URL, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as response:
                 if response.status != 200:
-                    print(f"API Error {response.status}: {await response.text()}")
+                    error_text = await response.text()
+                    print(f"Groq Error {response.status}: {error_text}")
                     return None
+                
                 data = await response.json()
-                return data['choices'][0]['message']['content'].strip()
+                content = data['choices'][0]['message']['content'].strip()
+                return content
     except Exception as e:
-        print(f"LLM Network error: {e}")
+        print(f"Network error: {e}")
         return None
 
-# ═══ ПАЙПЛАЙН АГЕНТОВ ═══
-
+# ═══ ПАЙПЛАЙН ═══
 async def run_pipeline(task_text, message, bot, status_msg_id):
     try:
-        print(f"🚀 Start processing task: {task_text[:30]}...")
-        
-        # Шаг 1: Ассистент
+        # 1. Аналитик
         task_spec = await call_llm(ASSISTANT_PROMPT, task_text)
-        if not task_spec: raise Exception("Ошибка анализа")
+        if not task_spec:
+            raise Exception("Ошибка связи с AI (Аналитик)")
         
-        await bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg_id, text="⏳ Пишем код...")
+        await bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg_id, text="⏳ Пишу код...")
 
-        # Шаг 2: Кодер
+        # 2. Кодер
         code_solution = await call_llm(CODER_PROMPT, task_spec)
-        if not code_solution: raise Exception("Ошибка генерации")
+        if not code_solution:
+            raise Exception("Ошибка связи с AI (Кодер)")
 
-        await bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg_id, text="⏳ Проверяем код...")
+        await bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg_id, text="⏳ Проверяю код...")
 
-        # Шаг 3: Ревьюер
+        # 3. Ревьюер
         review_context = f"ЗАДАНИЕ:\n{task_spec}\n\nКОД:\n{code_solution}"
         review_result = await call_llm(REVIEWER_PROMPT, review_context)
         
-        if not review_result: raise Exception("Ошибка проверки")
+        if not review_result:
+            raise Exception("Ошибка связи с AI (Ревьюер)")
 
+        # Финал
         is_approved = "APPROVED" in review_result.upper()
-        final_text = f"✅ <b>Готово!</b>\n\n📝 <b>Задача:</b>\n{task_spec}\n\n💻 <b>Код:</b>\n<code>{code_solution}</code>"
+        final_text = f"✅ <b>Готово!</b>\n\n📝 <b>ТЗ:</b>\n{task_spec}\n\n💻 <b>Код:</b>\n<code>{code_solution}</code>"
+        
         if not is_approved:
             final_text += f"\n\n⚠️ <b>Замечания:</b>\n{review_result}"
 
         await bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg_id, text=final_text, parse_mode="HTML")
-        print("✅ Task completed successfully")
 
     except Exception as e:
-        print(f"❌ Pipeline failed: {e}")
-        try:
-            await bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg_id, text=f"❌ Ошибка: {str(e)}")
-        except:
-            pass
+        print(f"Pipeline failed: {e}")
+        await bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg_id, text=f"❌ Ошибка: {str(e)}")
 
 # ═══ TELEGRAM HANDLERS ═══
-
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 
@@ -108,9 +106,7 @@ async def cmd_task(message: types.Message):
         return
 
     user_task = message.text.split(maxsplit=1)[1]
-    status_message = await message.answer("⏳ Агенты обрабатывают запрос...")
-    
-    # Запуск в фоне
+    status_message = await message.answer("⏳ Агенты думают...")
     asyncio.create_task(run_pipeline(user_task, message, bot, status_message.message_id))
 
 @dp.message()
@@ -118,32 +114,25 @@ async def echo_all(message: types.Message):
     await message.answer("Нажми /task и опиши задачу.")
 
 # ═══ WEB SERVER ДЛЯ RAILWAY (HEALTHCHECK) ═══
-# Этот сервер нужен только чтобы Railway не убивал контейнер
-
-async def handle_health(request):
-    return web.Response(text="OK - Bot is running")
+async def handle_healthcheck(request):
+    return web.Response(text="Bot is running")
 
 async def start_web_server():
     app = web.Application()
-    app.router.add_get('/', handle_health)
+    app.router.add_get('/', handle_healthcheck)
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', PORT)
+    site = web.TCPSite(runner, '0.0.0.0', 8080)
     await site.start()
-    print(f"🌍 Web server started on port {PORT} (Railway Healthcheck)")
+    print("Web server started on port 8080")
 
 # ═══ ЗАПУСК ═══
-
 async def main():
-    # Запускаем веб-сервер в фоне
+    # Запускаем веб-сервер в фоне, чтобы Railway не убивал контейнер
     asyncio.create_task(start_web_server())
     
-    print("🤖 Starting Telegram Bot polling...")
-    # Увеличиваем таймаут, чтобы соединение было стабильнее
-    await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types(), skip_updates=True)
+    print("Bot polling started...")
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("Bot stopped")
+    asyncio.run(main())
