@@ -20,7 +20,7 @@ if not TELEGRAM_TOKEN or not GROQ_API_KEY:
     raise ValueError("❌ Ошибка запуска: Не найдены TELEGRAM_TOKEN или GROQ_API_KEY в переменных окружения!")
 
 # Настройки Groq (ВНИМАНИЕ: Имя модели должно быть точным)
-GROQ_MODEL = "qwen-2.5-coder-32b"
+MODEL_NAME = "qwen-3-32b"
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 # Промпты агентов
