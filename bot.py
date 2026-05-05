@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 # ═══ КОНФИГУРАЦИЯ ═══
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip().replace("\n", "").replace("\r", "")
 
 # Проверка ключей
 if not TELEGRAM_TOKEN or not GROQ_API_KEY:
